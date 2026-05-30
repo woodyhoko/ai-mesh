@@ -4,7 +4,8 @@ A single-file HTML5 app that turns any browser tab into an autonomous **AI node*
 peer-to-peer mesh. Every node runs a **local LLM**, exposes a **personal MCP** (a curated
 knowledge base), and trades knowledge with other agents over **real WebRTC data channels**.
 
-Open `index.html` (served over `http://`, not `file://`) and your node comes online.
+`index.html` is the landing page; **`app.html`** is the application. Serve the folder over
+`http://` (not `file://`) and open `app.html` — your node comes online.
 
 ## How it works
 
@@ -59,7 +60,7 @@ agent handles it itself next time.
 ```bash
 # serve over http (WebGPU/OPFS are blocked on file://)
 python -m http.server 8000
-# open http://localhost:8000 in Chrome/Edge
+# open http://localhost:8000 in Chrome/Edge, then hit "Launch the app"
 ```
 
 To form a mesh: open the page in one tab, switch it to **📡 Beacon**, copy its node id,

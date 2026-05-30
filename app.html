@@ -1,0 +1,1481 @@
+<!-- AI Mesh — a peer-to-peer fabric of on-device AI agents -->
+<!-- Each node runs a local LLM (Chrome built-in Prompt API, falling back to on-device Gemma via LiteRT/WebGPU). -->
+<!-- Nodes find each other through a tiny signalling broker, then talk DIRECTLY over WebRTC data channels. -->
+<!-- Only "beacon" nodes stay registered on the broker so newcomers can find the mesh; everyone else hangs up. -->
+<!doctype html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AI Mesh — Connected On-Device Intelligence</title>
+    <meta name="description"
+        content="A peer-to-peer mesh of on-device AI agents. Each node runs a local LLM, exposes a personal MCP, and answers other agents' requests — selectively." />
+
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=Space+Grotesk:wght@400;500;700&family=JetBrains+Mono:wght@400;500&display=swap"
+        rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css"
+        crossorigin="anonymous" referrerpolicy="no-referrer" />
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/peerjs/1.5.4/peerjs.min.js"></script>
+    <script src="https://unpkg.com/es-module-shims@1.7.0/dist/es-module-shims.js"></script>
+    <script type="importmap">
+        {
+            "imports": {
+                "@mediapipe/tasks-genai": "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-genai/+esm"
+            }
+        }
+    </script>
+
+    <style>
+        :root {
+            --bg: #070b16;
+            --surface: #111a2e;
+            --surface-2: #18233d;
+            --surface-hover: #22304f;
+            --node: #38bdf8;
+            --node-soft: rgba(56, 189, 248, .14);
+            --mesh: #a78bfa;
+            --mesh-soft: rgba(167, 139, 250, .14);
+            --accent: #22d3ee;
+            --gold: #fbbf24;
+            --ok: #34d399;
+            --warn: #fb923c;
+            --bad: #f87171;
+            --ink: #eef3ff;
+            --muted: #93a3c6;
+            --line: rgba(255, 255, 255, .09);
+            --glass: rgba(17, 26, 46, .72);
+            --glass-border: rgba(255, 255, 255, .1);
+            --font: 'Outfit', system-ui, sans-serif;
+            --head: 'Space Grotesk', system-ui, sans-serif;
+            --mono: 'JetBrains Mono', ui-monospace, monospace;
+        }
+
+        * { box-sizing: border-box; }
+
+        body {
+            margin: 0;
+            min-height: 100vh;
+            background: var(--bg);
+            background-image:
+                radial-gradient(circle at 14% 10%, rgba(56, 189, 248, .12) 0%, transparent 42%),
+                radial-gradient(circle at 86% 16%, rgba(167, 139, 250, .12) 0%, transparent 42%),
+                radial-gradient(circle at 50% 112%, rgba(34, 211, 238, .12) 0%, transparent 52%);
+            color: var(--ink);
+            font-family: var(--font);
+            -webkit-font-smoothing: antialiased;
+        }
+
+        @keyframes fadeIn { from { opacity: 0 } to { opacity: 1 } }
+        @keyframes slideUp { from { transform: translateY(16px); opacity: 0 } to { transform: translateY(0); opacity: 1 } }
+        @keyframes pulse { 0% { transform: scale(1); opacity: 1 } 50% { transform: scale(1.6); opacity: 0 } 100% { transform: scale(1); opacity: 0 } }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        a { color: var(--accent); }
+
+        /* ---------- Loader / model gate ---------- */
+        .loader-overlay {
+            position: fixed; inset: 0; z-index: 2000;
+            display: flex; align-items: center; justify-content: center;
+            background: var(--bg);
+            background-image:
+                radial-gradient(circle at 20% 20%, rgba(56, 189, 248, .16) 0, transparent 45%),
+                radial-gradient(circle at 80% 80%, rgba(167, 139, 250, .14) 0, transparent 45%);
+            padding: 24px;
+        }
+        .gate { text-align: center; max-width: 500px; animation: fadeIn .8s ease-out; }
+        .gate .kicker { text-transform: uppercase; letter-spacing: .34em; font-size: .72rem; color: var(--muted); margin-bottom: 14px; }
+        .gate h1 {
+            font-family: var(--head); font-weight: 700; font-size: 2.9rem; margin: 0 0 .4rem;
+            background: linear-gradient(110deg, var(--node), var(--mesh) 55%, var(--accent));
+            -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
+        }
+        .gate .lede { color: var(--muted); font-size: 1.02rem; line-height: 1.6; margin: 0 auto 22px; max-width: 420px; }
+        .gate-note { font-size: .92rem; line-height: 1.55; color: var(--muted); margin: 18px auto 0; max-width: 440px; }
+        .gate-sub { font-size: .76rem; line-height: 1.5; color: var(--muted); opacity: .7; margin-top: 14px; }
+
+        .backend-chip {
+            display: inline-flex; align-items: center; gap: 8px;
+            padding: 7px 15px; border-radius: 999px; font-size: .82rem; font-weight: 500;
+            background: var(--surface-2); border: 1px solid var(--line); margin-bottom: 20px;
+        }
+        .backend-chip .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+        .backend-chip.ok .dot { background: var(--ok); box-shadow: 0 0 10px var(--ok); }
+        .backend-chip.gemma .dot { background: var(--gold); box-shadow: 0 0 10px var(--gold); }
+
+        .progress-bar { width: 320px; max-width: 80vw; height: 6px; background: var(--surface); border-radius: 3px; margin: 22px auto 0; overflow: hidden; }
+        .progress-fill { height: 100%; width: 0; background: linear-gradient(90deg, var(--node), var(--mesh)); transition: width .3s ease; }
+
+        /* ---------- Buttons ---------- */
+        .btn {
+            font-family: var(--font); font-size: .92rem; font-weight: 600;
+            border: none; border-radius: 11px; padding: 11px 20px; cursor: pointer;
+            color: #04121f; background: linear-gradient(120deg, var(--node), var(--accent));
+            transition: transform .15s, box-shadow .15s, opacity .15s;
+            box-shadow: 0 8px 22px rgba(56, 189, 248, .26);
+        }
+        .btn:hover:not(:disabled) { transform: translateY(-2px); box-shadow: 0 12px 28px rgba(56, 189, 248, .34); }
+        .btn:disabled { opacity: .45; cursor: not-allowed; box-shadow: none; }
+        .btn-ghost { background: var(--surface-2); color: var(--ink); border: 1px solid var(--line); box-shadow: none; }
+        .btn-ghost:hover:not(:disabled) { background: var(--surface-hover); transform: translateY(-1px); box-shadow: none; }
+        .btn-sm { padding: 8px 13px; font-size: .8rem; border-radius: 9px; }
+        .btn-danger { background: linear-gradient(120deg, var(--bad), #e0598a); color: #fff; box-shadow: none; }
+        .icon-btn {
+            background: var(--surface-2); border: 1px solid var(--line); color: var(--muted);
+            width: 32px; height: 32px; border-radius: 9px; cursor: pointer; display: inline-flex;
+            align-items: center; justify-content: center; transition: .15s; flex: 0 0 auto;
+        }
+        .icon-btn:hover { background: var(--surface-hover); color: var(--ink); }
+
+        /* ---------- App shell ---------- */
+        .app { max-width: 1380px; margin: 0 auto; padding: 20px clamp(14px, 3vw, 28px) 90px; animation: fadeIn .6s ease-out; }
+        header.top {
+            display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+            padding: 13px 18px; margin-bottom: 18px;
+            background: var(--glass); border: 1px solid var(--glass-border); border-radius: 16px; backdrop-filter: blur(12px);
+        }
+        .brand { display: flex; align-items: center; gap: 12px; margin-right: auto; }
+        .brand .mark { width: 42px; height: 42px; border-radius: 12px; display: grid; place-items: center; background: linear-gradient(135deg, var(--node), var(--mesh)); font-size: 1.2rem; }
+        .brand h1 { font-family: var(--head); font-size: 1.3rem; margin: 0; line-height: 1.1; font-weight: 700; }
+        .brand p { margin: 2px 0 0; font-size: .76rem; color: var(--muted); }
+        .top .backend-chip { margin: 0; }
+        .mesh-stat {
+            display: inline-flex; align-items: center; gap: 8px; font-size: .82rem; font-weight: 600;
+            padding: 7px 14px; border-radius: 999px; background: var(--surface-2); border: 1px solid var(--line);
+        }
+        .mesh-stat .live { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); position: relative; }
+        .mesh-stat.online .live { background: var(--ok); }
+        .mesh-stat.online .live::after { content: ''; position: absolute; inset: -3px; border-radius: 50%; background: var(--ok); animation: pulse 1.8s ease-out infinite; }
+
+        /* ---------- Layout grid ---------- */
+        .grid { display: grid; grid-template-columns: 340px 1fr 360px; gap: 18px; align-items: start; }
+        .panel { background: var(--glass); border: 1px solid var(--glass-border); border-radius: 18px; padding: 18px; backdrop-filter: blur(12px); margin-bottom: 18px; }
+        .panel:last-child { margin-bottom: 0; }
+        .panel-head { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+        .panel-head h2 { font-family: var(--head); font-size: 1.06rem; margin: 0; font-weight: 700; }
+        .panel-head .count { margin-left: auto; font-size: .76rem; color: var(--muted); background: var(--surface-2); padding: 3px 10px; border-radius: 999px; border: 1px solid var(--line); }
+        .panel-sub { font-size: .8rem; color: var(--muted); margin: -6px 0 14px; line-height: 1.5; }
+
+        /* ---------- Fields ---------- */
+        .field { margin-bottom: 13px; }
+        .field label { display: block; font-size: .74rem; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); margin-bottom: 6px; }
+        .field input[type=text], .field textarea, .field select,
+        .modal input[type=text], .modal textarea, .modal select {
+            width: 100%; padding: 12px 14px; border-radius: 12px; font-size: .92rem; font-family: var(--font);
+            background: linear-gradient(180deg, rgba(7,11,22,.6), rgba(7,11,22,.25)); color: var(--ink); outline: none;
+            border: 1px solid var(--line); box-shadow: inset 0 1px 2px rgba(0,0,0,.3); transition: border-color .15s, box-shadow .15s, background .15s;
+        }
+        .field input::placeholder, .field textarea::placeholder, .modal input::placeholder, .modal textarea::placeholder { color: rgba(147,163,198,.55); }
+        .field textarea, .modal textarea { resize: vertical; min-height: 60px; line-height: 1.5; }
+        .field input:focus, .field textarea:focus, .field select:focus,
+        .modal input:focus, .modal textarea:focus, .modal select:focus {
+            border-color: var(--accent); box-shadow: 0 0 0 3px rgba(34, 211, 238, .18), inset 0 1px 2px rgba(0,0,0,.25);
+            background: linear-gradient(180deg, rgba(7,11,22,.5), rgba(24,35,61,.35));
+        }
+        /* custom-styled selects (kill the default OS chrome) */
+        select { -webkit-appearance: none; appearance: none; cursor: pointer;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath fill='%2393a3c6' d='M1 1l5 5 5-5'/%3E%3C/svg%3E");
+            background-repeat: no-repeat; background-position: right 14px center; padding-right: 34px !important;
+        }
+        select option { background: var(--surface); color: var(--ink); }
+        .field .mono { font-family: var(--mono); letter-spacing: .02em; }
+        .row2 { display: flex; gap: 10px; }
+        .row2 > * { flex: 1; }
+        /* nicer checkboxes */
+        input[type=checkbox] { -webkit-appearance: none; appearance: none; width: 17px; height: 17px; border-radius: 5px;
+            border: 1px solid var(--line); background: var(--surface); cursor: pointer; position: relative; flex: 0 0 auto; transition: .15s; vertical-align: -3px; }
+        input[type=checkbox]:checked { background: linear-gradient(135deg, var(--node), var(--accent)); border-color: var(--accent); }
+        input[type=checkbox]:checked::after { content: '✓'; position: absolute; inset: 0; display: grid; place-items: center; font-size: .72rem; color: #04121f; font-weight: 700; }
+
+        /* ---------- Identity ---------- */
+        .id-card { display: flex; align-items: center; gap: 12px; padding: 12px; border-radius: 13px; background: var(--surface); border: 1px solid var(--line); margin-bottom: 14px; }
+        .id-ava { width: 46px; height: 46px; border-radius: 12px; display: grid; place-items: center; font-size: 1.4rem; background: linear-gradient(135deg, var(--mesh), var(--node)); flex: 0 0 auto; }
+        .id-meta { min-width: 0; flex: 1; }
+        .id-meta .nm { font-weight: 700; font-size: .98rem; }
+        .id-meta .pid { font-family: var(--mono); font-size: .76rem; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+        .id-meta .pid b { color: var(--accent); }
+
+        .role-toggle { display: flex; gap: 8px; margin-bottom: 14px; }
+        .role-opt { flex: 1; text-align: center; padding: 10px 8px; border-radius: 11px; cursor: pointer; background: var(--surface); border: 1px solid var(--line); transition: .15s; }
+        .role-opt:hover { border-color: var(--mesh); }
+        .role-opt.active { background: var(--mesh-soft); border-color: var(--mesh); }
+        .role-opt .t { font-weight: 700; font-size: .86rem; display: block; }
+        .role-opt .d { font-size: .68rem; color: var(--muted); margin-top: 3px; display: block; line-height: 1.35; }
+
+        /* ---------- Knowledge base ---------- */
+        .kb-list { display: flex; flex-direction: column; gap: 9px; max-height: 320px; overflow-y: auto; padding-right: 4px; }
+        .kb-item { background: var(--surface); border: 1px solid var(--line); border-radius: 11px; padding: 10px 12px; border-left: 3px solid var(--node); }
+        .kb-item.private { border-left-color: var(--bad); }
+        .kb-item .kb-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+        .kb-item .kb-key { font-weight: 600; font-size: .86rem; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .kb-item .kb-val { font-size: .82rem; color: var(--muted); line-height: 1.45; word-break: break-word; }
+        .sector-badge { font-size: .62rem; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; padding: 2px 8px; border-radius: 999px; }
+        .sector-badge.public { background: var(--node-soft); color: var(--node); }
+        .sector-badge.private { background: rgba(248, 113, 113, .16); color: var(--bad); }
+        .kb-empty, .empty { text-align: center; color: var(--muted); font-size: .84rem; padding: 22px 10px; line-height: 1.5; }
+
+        /* ---------- Peers ---------- */
+        .peer-list { display: flex; flex-direction: column; gap: 9px; max-height: 280px; overflow-y: auto; padding-right: 4px; }
+        .peer-card { background: var(--surface); border: 1px solid var(--line); border-radius: 11px; padding: 10px 12px; display: flex; align-items: center; gap: 10px; transition: .15s; }
+        .peer-card:hover { border-color: var(--node); }
+        .peer-card .pdot { width: 9px; height: 9px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 8px var(--ok); flex: 0 0 auto; }
+        .peer-card .pdot.relayed { background: var(--gold); box-shadow: 0 0 8px var(--gold); }
+        .peer-card .pmeta { min-width: 0; flex: 1; }
+        .peer-card .pmeta .pn { font-weight: 600; font-size: .88rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .peer-card .pmeta .pi { font-family: var(--mono); font-size: .72rem; color: var(--muted); }
+        .peer-card .ptag { font-size: .64rem; color: var(--muted); border: 1px solid var(--line); padding: 2px 7px; border-radius: 999px; }
+
+        /* ---------- Mesh map ---------- */
+        .mesh-map { position: relative; height: 230px; border-radius: 14px; background: radial-gradient(circle at 50% 50%, rgba(56,189,248,.06), transparent 70%); border: 1px solid var(--line); overflow: hidden; margin-bottom: 14px; }
+        .mesh-map svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+        .node-dot { position: absolute; transform: translate(-50%, -50%); display: flex; flex-direction: column; align-items: center; gap: 4px; }
+        .node-dot .nb { width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; font-size: .8rem; background: linear-gradient(135deg, var(--node), var(--accent)); border: 2px solid rgba(255,255,255,.25); }
+        .node-dot.self .nb { background: linear-gradient(135deg, var(--mesh), #f0abfc); box-shadow: 0 0 14px var(--mesh); }
+        .node-dot .nl { font-size: .62rem; color: var(--muted); max-width: 64px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+        /* ---------- Query / console ---------- */
+        .console { display: flex; flex-direction: column; gap: 12px; }
+        /* unified chat-style composer */
+        .composer {
+            display: flex; align-items: flex-end; gap: 10px; padding: 8px 8px 8px 14px; border-radius: 16px;
+            background: linear-gradient(180deg, rgba(7,11,22,.6), rgba(7,11,22,.25)); border: 1px solid var(--line);
+            box-shadow: inset 0 1px 3px rgba(0,0,0,.35); transition: border-color .15s, box-shadow .15s;
+        }
+        .composer:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(34,211,238,.16), inset 0 1px 3px rgba(0,0,0,.3); }
+        .composer textarea {
+            flex: 1; min-height: 26px; max-height: 160px; resize: none; border: none; outline: none; background: transparent;
+            color: var(--ink); font-family: var(--font); font-size: .95rem; line-height: 1.5; padding: 8px 0;
+        }
+        .composer textarea::placeholder { color: rgba(147,163,198,.55); }
+        .composer .send {
+            width: 42px; height: 42px; border-radius: 12px; border: none; cursor: pointer; flex: 0 0 auto;
+            background: linear-gradient(135deg, var(--node), var(--accent)); color: #04121f; font-size: 1rem;
+            display: grid; place-items: center; transition: transform .15s, box-shadow .15s; box-shadow: 0 6px 16px rgba(34,211,238,.3);
+        }
+        .composer .send:hover { transform: translateY(-2px) scale(1.03); box-shadow: 0 9px 20px rgba(34,211,238,.4); }
+        .scope-pick { display: flex; gap: 12px; align-items: center; font-size: .78rem; color: var(--muted); margin-top: 2px; flex-wrap: wrap; }
+        .scope-pick > span { display: inline-flex; align-items: center; gap: 6px; }
+        .scope-pick select { padding: 7px 30px 7px 11px !important; border-radius: 9px; font-size: .78rem; width: auto; }
+        .scope-pick label { display: flex; align-items: center; gap: 7px; cursor: pointer; }
+        .decline-tag { display: inline-block; font-weight: 600; color: var(--warn); }
+        .decline-reason { display: block; margin-top: 3px; font-size: .8rem; color: var(--muted); font-style: italic; line-height: 1.45; }
+
+        .feed { display: flex; flex-direction: column; gap: 12px; max-height: 540px; overflow-y: auto; padding-right: 4px; }
+        .q-block { border: 1px solid var(--line); border-radius: 14px; background: var(--surface); overflow: hidden; animation: slideUp .25s ease-out; }
+        .q-block .q-head { padding: 12px 14px; background: var(--surface-2); display: flex; align-items: flex-start; gap: 10px; }
+        .q-block .q-head .qi { width: 28px; height: 28px; border-radius: 8px; display: grid; place-items: center; background: var(--mesh-soft); color: var(--mesh); flex: 0 0 auto; }
+        .q-block .q-head .qt { flex: 1; font-size: .92rem; font-weight: 600; line-height: 1.45; }
+        .q-block .q-head .qmeta { font-size: .7rem; color: var(--muted); margin-top: 3px; font-weight: 400; }
+        .q-resps { padding: 6px 14px 12px; display: flex; flex-direction: column; gap: 8px; }
+        .resp { display: flex; gap: 9px; padding: 9px 11px; border-radius: 10px; background: var(--bg); border: 1px solid var(--line); }
+        .resp .ri { width: 24px; height: 24px; border-radius: 7px; display: grid; place-items: center; font-size: .72rem; flex: 0 0 auto; background: var(--node-soft); color: var(--node); }
+        .resp .rb { min-width: 0; flex: 1; }
+        .resp .rn { font-size: .76rem; font-weight: 600; color: var(--node); display: flex; align-items: center; gap: 6px; }
+        .resp .rt { font-size: .86rem; line-height: 1.5; margin-top: 2px; word-break: break-word; }
+        .resp.decline .ri { background: rgba(251,146,60,.14); color: var(--warn); }
+        .resp.decline .rn { color: var(--warn); }
+        .resp.self .ri { background: var(--mesh-soft); color: var(--mesh); }
+        .resp.self .rn { color: var(--mesh); }
+        .q-waiting { font-size: .78rem; color: var(--muted); display: flex; align-items: center; gap: 8px; padding: 4px 2px; }
+
+        /* ---------- History / inbox ---------- */
+        .hist-list { display: flex; flex-direction: column; gap: 10px; max-height: 560px; overflow-y: auto; padding-right: 4px; }
+        .hist-card { border: 1px solid var(--line); border-radius: 12px; background: var(--surface); padding: 11px 13px; border-left: 3px solid var(--muted); }
+        .hist-card.answered { border-left-color: var(--ok); }
+        .hist-card.missing { border-left-color: var(--warn); }
+        .hist-card.private { border-left-color: var(--bad); }
+        .hist-card.blocked { border-left-color: var(--bad); }
+        .hist-card.throttled { border-left-color: var(--gold); }
+        .hist-card .hc-top { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+        .hist-card .hc-from { font-size: .8rem; font-weight: 600; }
+        .hist-card .hc-time { font-size: .68rem; color: var(--muted); margin-left: auto; }
+        .verdict { font-size: .62rem; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; padding: 2px 8px; border-radius: 999px; }
+        .verdict.answered { background: rgba(52,211,153,.16); color: var(--ok); }
+        .verdict.missing { background: rgba(251,146,60,.16); color: var(--warn); }
+        .verdict.private { background: rgba(248,113,113,.16); color: var(--bad); }
+        .verdict.blocked { background: rgba(248,113,113,.2); color: var(--bad); }
+        .verdict.throttled { background: rgba(251,191,36,.18); color: var(--gold); }
+        .hist-card .hc-q { font-size: .86rem; line-height: 1.45; margin-bottom: 5px; }
+        .hist-card .hc-reason { font-size: .76rem; color: var(--muted); line-height: 1.45; font-style: italic; }
+        .hist-card .hc-ans { font-size: .82rem; line-height: 1.45; margin-top: 6px; padding: 7px 9px; border-radius: 8px; background: var(--bg); border: 1px solid var(--line); }
+        .hist-card .hc-actions { display: flex; gap: 6px; margin-top: 9px; flex-wrap: wrap; }
+
+        /* ---------- Tabs ---------- */
+        .tabs { display: flex; gap: 6px; margin-bottom: 14px; background: var(--surface); padding: 4px; border-radius: 12px; border: 1px solid var(--line); }
+        .tab { flex: 1; text-align: center; padding: 8px; border-radius: 9px; cursor: pointer; font-size: .82rem; font-weight: 600; color: var(--muted); transition: .15s; }
+        .tab:hover { color: var(--ink); }
+        .tab.active { background: var(--surface-2); color: var(--ink); }
+        .tab .badge { font-size: .62rem; background: var(--bad); color: #fff; border-radius: 999px; padding: 1px 6px; margin-left: 4px; }
+
+        /* ---------- Toast ---------- */
+        .toast-wrap { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); z-index: 3000; display: flex; flex-direction: column; gap: 8px; align-items: center; }
+        .toast { background: var(--surface-2); border: 1px solid var(--glass-border); border-radius: 11px; padding: 10px 16px; font-size: .85rem; box-shadow: 0 12px 30px rgba(0,0,0,.4); animation: slideUp .25s ease-out; max-width: 90vw; }
+        .toast.ok { border-color: var(--ok); }
+        .toast.bad { border-color: var(--bad); }
+
+        /* ---------- Modal ---------- */
+        .modal-overlay { position: fixed; inset: 0; z-index: 1500; display: none; align-items: center; justify-content: center; background: rgba(3, 6, 15, .74); backdrop-filter: blur(8px); padding: 20px; animation: fadeIn .25s; }
+        .modal-overlay.show { display: flex; }
+        .modal { background: var(--surface); border: 1px solid var(--glass-border); border-radius: 18px; width: 100%; max-width: 520px; max-height: 90vh; overflow-y: auto; animation: slideUp .3s ease-out; }
+        .modal-head { display: flex; align-items: center; gap: 12px; padding: 18px 20px 0; }
+        .modal-head h2 { font-family: var(--head); margin: 0; font-size: 1.2rem; font-weight: 700; }
+        .modal-head .icon-btn { margin-left: auto; }
+        .modal-body { padding: 16px 20px 20px; }
+        .modal-foot { display: flex; gap: 10px; margin-top: 6px; }
+        .modal-foot .btn { flex: 1; }
+
+        .corner-links { position: fixed; bottom: 14px; right: 14px; z-index: 999; display: flex; gap: 8px; font-size: 12.5px; }
+        .corner-links a { background: var(--glass); color: var(--ink); border: 1px solid var(--glass-border); padding: 7px 13px; border-radius: 999px; text-decoration: none; backdrop-filter: blur(8px); transition: .15s; }
+        .corner-links a:hover { border-color: var(--accent); color: var(--accent); }
+
+        @media (max-width: 1180px) { .grid { grid-template-columns: 1fr; } .feed, .hist-list { max-height: 420px; } }
+        @media (max-width: 620px) {
+            .gate h1 { font-size: 2.1rem; }
+            .brand p { display: none; }
+            .ask-row { flex-direction: column; }
+        }
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: var(--surface-hover); border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: var(--muted); }
+    </style>
+</head>
+
+<body>
+    <!-- ============ Loader / model gate ============ -->
+    <div id="loader" class="loader-overlay">
+        <div class="gate">
+            <div class="kicker">Connected Intelligence</div>
+            <h1>AI Mesh</h1>
+            <p class="lede">Your browser becomes an autonomous AI node. It runs a local LLM, exposes a personal MCP, and
+                trades knowledge with other agents over a real peer-to-peer WebRTC mesh.</p>
+
+            <div id="backend-chip" class="backend-chip"><span class="dot"></span><span id="backend-label">Detecting on-device AI…</span></div>
+
+            <div id="gate-action" style="display:none;">
+                <p id="gate-note" class="gate-note"></p>
+                <button id="enter-btn" class="btn"><i class="fa-solid fa-network-wired"></i>&nbsp; Bring my node online</button>
+                <p id="gate-sub" class="gate-sub"></p>
+            </div>
+
+            <div id="gate-loading" style="display:none;">
+                <p id="loader-message" class="gate-note">Loading…</p>
+                <div class="progress-bar"><div id="progress-fill" class="progress-fill"></div></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ============ App ============ -->
+    <div class="app" id="app" style="display:none;">
+        <header class="top">
+            <div class="brand">
+                <div class="mark">🕸️</div>
+                <div>
+                    <h1>AI Mesh</h1>
+                    <p>peer-to-peer on-device agents</p>
+                </div>
+            </div>
+            <div id="mesh-stat" class="mesh-stat"><span class="live"></span><span id="mesh-stat-label">Offline</span></div>
+            <div id="top-backend" class="backend-chip"><span class="dot"></span><span id="top-backend-label">—</span></div>
+        </header>
+
+        <div class="grid">
+            <!-- ============ LEFT: identity + knowledge ============ -->
+            <div>
+                <div class="panel">
+                    <div class="panel-head"><h2>This Node</h2></div>
+                    <div class="id-card">
+                        <div class="id-ava" id="id-ava">🤖</div>
+                        <div class="id-meta">
+                            <div class="nm" id="id-name">—</div>
+                            <div class="pid">id <b id="id-pid">connecting…</b>
+                                <button class="icon-btn" id="copy-id" title="Copy node id" style="width:24px;height:24px;font-size:.7rem"><i class="fa-solid fa-copy"></i></button>
+                            </div>
+                        </div>
+                        <button class="icon-btn" id="edit-profile" title="Edit profile"><i class="fa-solid fa-pen"></i></button>
+                    </div>
+
+                    <div class="role-toggle">
+                        <div class="role-opt" id="role-beacon" data-role="beacon">
+                            <span class="t">📡 Beacon</span>
+                            <span class="d">Stays on the broker so newcomers can find the mesh</span>
+                        </div>
+                        <div class="role-opt active" id="role-peer" data-role="peer">
+                            <span class="t">🔗 Participant</span>
+                            <span class="d">Hangs up the broker after joining; pure P2P</span>
+                        </div>
+                    </div>
+
+                    <div class="field">
+                        <label>Join a mesh — paste a beacon's node id</label>
+                        <div class="row2">
+                            <input type="text" id="join-id" class="mono" placeholder="e.g. mesh-AB12CD" />
+                            <button class="btn btn-sm" id="join-btn" style="flex:0 0 auto"><i class="fa-solid fa-plug"></i> Join</button>
+                        </div>
+                    </div>
+                    <div class="field" style="margin-bottom:4px">
+                        <label>Mesh passphrase (shared secret — optional auth)</label>
+                        <input type="text" id="mesh-token" class="mono" placeholder="leave blank for open mesh" />
+                    </div>
+                </div>
+
+                <div class="panel">
+                    <div class="panel-head">
+                        <h2>Personal MCP</h2>
+                        <span class="count" id="kb-count">0 facts</span>
+                    </div>
+                    <p class="panel-sub">Facts your agent may share. <b style="color:var(--bad)">Private</b> facts are never sent to peers — your agent declines instead.</p>
+                    <div class="kb-list" id="kb-list"></div>
+                    <button class="btn btn-sm" id="add-kb" style="margin-top:12px;width:100%"><i class="fa-solid fa-plus"></i> Add a fact</button>
+                </div>
+
+                <div class="panel">
+                    <div class="panel-head"><h2>Security</h2></div>
+                    <p class="panel-sub" style="margin-bottom:10px">Every inbound message passes a semantic firewall before your agent ever sees it.</p>
+                    <div class="field" style="margin-bottom:8px">
+                        <label>Safety level</label>
+                        <select id="safety-level">
+                            <option value="standard" selected>Standard — block injection + DoS</option>
+                            <option value="strict">Strict — also auto-redact PII on egress</option>
+                            <option value="paranoid">Paranoid — only answer trusted peers</option>
+                        </select>
+                    </div>
+                    <label style="display:flex;align-items:center;gap:8px;font-size:.82rem;color:var(--muted);cursor:pointer;margin-top:6px">
+                        <input type="checkbox" id="notify-decline" checked /> Share my reason when I decline (requesters always get a verdict)
+                    </label>
+                    <div id="sec-stats" style="font-size:.74rem;color:var(--muted);margin-top:12px;line-height:1.6"></div>
+                </div>
+            </div>
+
+            <!-- ============ CENTER: mesh map + ask the mesh ============ -->
+            <div>
+                <div class="panel">
+                    <div class="panel-head">
+                        <h2>The Mesh</h2>
+                        <span class="count" id="mesh-count">just you</span>
+                    </div>
+                    <div class="mesh-map" id="mesh-map">
+                        <svg id="mesh-svg"></svg>
+                    </div>
+                    <div class="peer-list" id="peer-list">
+                        <div class="empty">No peers yet. Become a 📡 Beacon and share your id, or paste a beacon id above to join an existing mesh.</div>
+                    </div>
+                </div>
+
+                <div class="panel">
+                    <div class="panel-head"><h2>Ask the Mesh</h2></div>
+                    <p class="panel-sub">Broadcast a question. It floods the mesh; every agent decides — on its own device — whether it can and should answer.</p>
+                    <div class="console">
+                        <div class="composer">
+                            <textarea id="ask-input" rows="1" placeholder="Ask the mesh anything — e.g. Who here knows WebGPU performance tuning?"></textarea>
+                            <button class="send" id="ask-btn" title="Broadcast (Ctrl/⌘ + Enter)"><i class="fa-solid fa-paper-plane"></i></button>
+                        </div>
+                        <div class="scope-pick">
+                            <span><i class="fa-solid fa-sliders"></i> hops (TTL)</span>
+                            <select id="ask-ttl">
+                                <option value="1">1 — direct neighbours</option>
+                                <option value="4" selected>4 — across the mesh</option>
+                                <option value="8">8 — far reach</option>
+                            </select>
+                            <label><input type="checkbox" id="ask-self" checked /> include my own agent</label>
+                        </div>
+                        <div class="feed" id="feed">
+                            <div class="empty">Your conversations with the mesh appear here.</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ============ RIGHT: inbox / request history ============ -->
+            <div>
+                <div class="panel">
+                    <div class="tabs">
+                        <div class="tab active" data-tab="inbox">Inbox <span class="badge" id="inbox-badge" style="display:none">0</span></div>
+                        <div class="tab" data-tab="outbox">My Queries</div>
+                    </div>
+                    <div class="panel-head" style="margin-bottom:8px">
+                        <h2 id="hist-title">Request History</h2>
+                        <button class="icon-btn" id="clear-hist" title="Clear"><i class="fa-solid fa-trash"></i></button>
+                    </div>
+                    <p class="panel-sub" id="hist-sub">Every request other agents sent you, the verdict, and why. Disagree? Re-answer or add a fact to tune your agent.</p>
+                    <div class="hist-list" id="hist-list">
+                        <div class="empty">No requests yet. When peers query the mesh, their requests to your agent land here.</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ============ Profile modal ============ -->
+    <div class="modal-overlay" id="profile-modal">
+        <div class="modal">
+            <div class="modal-head"><h2>Node Profile</h2><button class="icon-btn" data-close="profile-modal"><i class="fa-solid fa-xmark"></i></button></div>
+            <div class="modal-body">
+                <div class="field"><label>Display name</label><input type="text" id="pf-name" placeholder="e.g. Ada's Agent" /></div>
+                <div class="field"><label>Avatar emoji</label><input type="text" id="pf-emoji" maxlength="4" placeholder="🤖" /></div>
+                <div class="field"><label>Agent persona — how it should behave when answering peers</label><textarea id="pf-persona" placeholder="e.g. A concise, helpful research assistant who only shares verified facts."></textarea></div>
+                <div class="field"><label>Public capability tags (comma separated)</label><input type="text" id="pf-tags" placeholder="webgpu, climate-data, rust" /></div>
+                <div class="modal-foot">
+                    <button class="btn btn-ghost" data-close="profile-modal">Cancel</button>
+                    <button class="btn" id="pf-save"><i class="fa-solid fa-check"></i> Save</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ============ Knowledge modal ============ -->
+    <div class="modal-overlay" id="kb-modal">
+        <div class="modal">
+            <div class="modal-head"><h2 id="kb-modal-title">Add a fact</h2><button class="icon-btn" data-close="kb-modal"><i class="fa-solid fa-xmark"></i></button></div>
+            <div class="modal-body">
+                <div class="field"><label>Topic / key</label><input type="text" id="kb-key" placeholder="e.g. My field of expertise" /></div>
+                <div class="field"><label>Value — what your agent knows</label><textarea id="kb-val" placeholder="e.g. I optimise WebGPU compute shaders for on-device inference."></textarea></div>
+                <div class="field"><label>Sector</label>
+                    <select id="kb-sector">
+                        <option value="public">🌐 Public — shareable with the mesh</option>
+                        <option value="private">🔒 Private — never leaves this device</option>
+                    </select>
+                </div>
+                <div class="modal-foot">
+                    <button class="btn btn-ghost" data-close="kb-modal">Cancel</button>
+                    <button class="btn" id="kb-save"><i class="fa-solid fa-check"></i> Save fact</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ============ Re-answer modal ============ -->
+    <div class="modal-overlay" id="reanswer-modal">
+        <div class="modal">
+            <div class="modal-head"><h2>Override the verdict</h2><button class="icon-btn" data-close="reanswer-modal"><i class="fa-solid fa-xmark"></i></button></div>
+            <div class="modal-body">
+                <p class="panel-sub" id="ra-context"></p>
+                <div class="field"><label>Send this answer instead</label><textarea id="ra-text" placeholder="Type the reply you want to send to that agent…"></textarea></div>
+                <div class="modal-foot">
+                    <button class="btn btn-ghost" data-close="reanswer-modal">Cancel</button>
+                    <button class="btn" id="ra-send"><i class="fa-solid fa-paper-plane"></i> Send reply</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="toast-wrap" id="toast-wrap"></div>
+    <div class="corner-links">
+        <a href="index.html">⌂ Home</a>
+        <a href="docs.html">📖 Docs</a>
+        <a href="https://github.com/woodyhoko/ai-mesh" target="_blank" rel="noopener">➤ Source</a>
+    </div>
+
+    <script type="module">
+        import { FilesetResolver, LlmInference } from '@mediapipe/tasks-genai';
+
+        /* ======================================================================
+           AI BACKEND — Chrome built-in Prompt API, with on-device Gemma fallback
+           (mirrors the approach used in the Collective Intelligence demo)
+           ====================================================================== */
+        const MODEL_URL = "https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it-web.task";
+        const MODEL_FILENAME = "gemma-4-E2B-it-web.task";
+
+        const AI = {
+            backend: null, gemmaLlm: null, ready: false,
+            async detect() {
+                if (typeof window.LanguageModel !== 'undefined') {
+                    try {
+                        const avail = await window.LanguageModel.availability();
+                        if (avail && avail !== 'unavailable') { this.backend = 'chrome'; return 'chrome'; }
+                    } catch (_) { }
+                }
+                this.backend = 'gemma'; return 'gemma';
+            },
+            async run(prompt, { schema = null } = {}) {
+                if (this.backend === 'chrome') {
+                    const session = await window.LanguageModel.create();
+                    try {
+                        const opts = schema ? { responseConstraint: schema } : {};
+                        return await session.prompt(prompt, opts);
+                    } finally { session.destroy(); }
+                }
+                const wrapped = `<start_of_turn>user\n${prompt}\n<end_of_turn>\n<start_of_turn>model\n`;
+                const out = await this.gemmaLlm.generateResponse(wrapped);
+                return (out || '').trim();
+            }
+        };
+
+        function setProgress(pct) { const f = document.getElementById('progress-fill'); if (f) f.style.width = pct + '%'; }
+
+        async function loadGemma() {
+            const msg = document.getElementById('loader-message');
+            if (window.location.protocol === 'file:') {
+                alert("Local security restriction:\n\nGemma uses WebGPU/OPFS features browsers block on 'file://'.\nServe over http, e.g.  python -m http.server  then open http://localhost:8000");
+            }
+            const ua = navigator.userAgent;
+            if (!ua.includes('Chrome') && !ua.includes('Edg')) {
+                alert('On-device Gemma needs Chrome or Edge (WebGPU).');
+            }
+            msg.textContent = "Fetching Gemma weights (cached after first download)…";
+            const { stream, size } = await loadModelWithOpfsCache(MODEL_URL, MODEL_FILENAME);
+            const tracked = streamWithProgress(stream, size, (prog, dl, total) => {
+                setProgress(Math.round(prog * 0.9));
+                const mb = b => (b / 1048576).toFixed(0);
+                msg.innerHTML = total
+                    ? `Downloading Gemma… ${prog}% (${mb(dl)} / ${mb(total)} MB)<br><span style="font-size:.8em;opacity:.6">Cached for next time</span>`
+                    : `Downloading Gemma… ${mb(dl)} MB`;
+            });
+            msg.textContent = "Initializing WebGPU & compiling model…";
+            setProgress(95);
+            const fileset = await FilesetResolver.forGenAiTasks('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-genai/wasm');
+            AI.gemmaLlm = await LlmInference.createFromOptions(fileset, {
+                baseOptions: { modelAssetBuffer: tracked.getReader() }, maxTokens: 1024, topK: 16, temperature: 0.7
+            });
+            setProgress(100);
+        }
+        function streamWithProgress(inputStream, contentLength, onProgress) {
+            let downloaded = 0;
+            return inputStream.pipeThrough(new TransformStream({
+                transform: (chunk, controller) => {
+                    downloaded += chunk.byteLength;
+                    const prog = contentLength > 0 ? Math.min(100, Math.round(downloaded / contentLength * 100)) : 0;
+                    try { onProgress && onProgress(prog, downloaded, contentLength); } catch (_) { }
+                    controller.enqueue(chunk);
+                }
+            }));
+        }
+        async function loadModelWithOpfsCache(modelUrl, fileName) {
+            try {
+                const opfsRoot = await navigator.storage.getDirectory();
+                try {
+                    const fh = await opfsRoot.getFileHandle(fileName);
+                    const file = await fh.getFile();
+                    const sh = await opfsRoot.getFileHandle(fileName + "_size");
+                    const expected = parseInt(await (await sh.getFile()).text(), 10);
+                    if (Number.isFinite(expected) && file.size === expected) return { stream: file.stream(), size: file.size };
+                    await opfsRoot.removeEntry(fileName).catch(() => { });
+                    await opfsRoot.removeEntry(fileName + "_size").catch(() => { });
+                } catch (e) { if (e && e.name !== "NotFoundError") console.warn("OPFS read error:", e); }
+                let expectedSize = 0;
+                try { const head = await fetch(modelUrl, { method: "HEAD" }); if (head.ok) expectedSize = Number(head.headers.get("Content-Length") || 0); } catch (_) { }
+                const response = await fetch(modelUrl);
+                if (!response.ok || !response.body) throw new Error(`Failed to fetch Gemma weights: ${response.status}`);
+                const [consumer, cache] = response.body.tee();
+                (async () => {
+                    try {
+                        const fh = await opfsRoot.getFileHandle(fileName, { create: true });
+                        const w = await fh.createWritable();
+                        const sh = await opfsRoot.getFileHandle(fileName + "_size", { create: true });
+                        const sw = await sh.createWritable();
+                        await sw.write(new TextEncoder().encode(String(expectedSize))); await sw.close();
+                        await cache.pipeTo(w);
+                    } catch (err) {
+                        await opfsRoot.removeEntry(fileName).catch(() => { });
+                        await opfsRoot.removeEntry(fileName + "_size").catch(() => { });
+                    }
+                })();
+                return { stream: consumer, size: expectedSize };
+            } catch (err) {
+                console.warn("OPFS unavailable, direct fetch:", err);
+                const response = await fetch(modelUrl);
+                if (!response.ok || !response.body) throw new Error(`Failed to fetch Gemma weights: ${response.status}`);
+                return { stream: response.body, size: Number(response.headers.get("Content-Length") || 0) };
+            }
+        }
+
+        /* ======================================================================
+           SEMANTIC FIREWALL — ingress/egress guard
+           (ported from AetherOS' security/firewall.py into the browser)
+           ====================================================================== */
+        const Firewall = {
+            bannedPhrases: [
+                "ignore previous instructions", "ignore all previous instructions",
+                "disregard the above", "do anything now", "dan mode",
+                "you are now", "system prompt", "delete system32", "rm -rf"
+            ],
+            piiPatterns: {
+                email: /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g,
+                ssn: /\b\d{3}-\d{2}-\d{4}\b/g,
+                credit_card: /\b(?:\d[ -]*?){13,16}\b/g,
+                api_key: /\b(sk-[a-zA-Z0-9]{20,}|gh[pousr]_[A-Za-z0-9]{20,})\b/g,
+                phone: /\b\+?\d[\d\s().-]{8,}\d\b/g
+            },
+            stats: { ingressBlocked: 0, egressRedacted: 0, throttled: 0 },
+            // returns {ok, reason}
+            validateIngress(content) {
+                if (typeof content !== 'string') return { ok: false, reason: 'malformed payload' };
+                if (content.length > 8000) { this.stats.ingressBlocked++; return { ok: false, reason: 'payload too large (possible DoS)' }; }
+                const lc = content.toLowerCase();
+                for (const p of this.bannedPhrases) {
+                    if (lc.includes(p)) { this.stats.ingressBlocked++; return { ok: false, reason: `prompt-injection pattern: "${p}"` }; }
+                }
+                return { ok: true };
+            },
+            redactEgress(content) {
+                let out = content, hit = false;
+                for (const [type, pat] of Object.entries(this.piiPatterns)) {
+                    out = out.replace(pat, m => { hit = true; return `[${type.toUpperCase()}_REDACTED]`; });
+                }
+                if (hit) this.stats.egressRedacted++;
+                return out;
+            }
+        };
+
+        // Per-peer token-bucket rate limiter — protects against message floods (DoS).
+        const RateLimiter = {
+            buckets: new Map(),
+            capacity: 8, refillPerSec: 2,
+            allow(peerId) {
+                const now = Date.now();
+                let b = this.buckets.get(peerId);
+                if (!b) { b = { tokens: this.capacity, last: now }; this.buckets.set(peerId, b); }
+                const elapsed = (now - b.last) / 1000;
+                b.tokens = Math.min(this.capacity, b.tokens + elapsed * this.refillPerSec);
+                b.last = now;
+                if (b.tokens < 1) { Firewall.stats.throttled++; return false; }
+                b.tokens -= 1; return true;
+            }
+        };
+
+        /* ======================================================================
+           STATE  (profile + knowledge persist in localStorage)
+           ====================================================================== */
+        const uid = () => Math.random().toString(36).slice(2, 10);
+        const now = () => Date.now();
+        const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+        const State = {
+            profile: { name: '', emoji: '🤖', persona: 'A concise, helpful agent that shares only what it actually knows.', tags: [] },
+            knowledge: [],          // {id, key, val, sector}
+            role: 'peer',           // 'beacon' | 'peer'
+            token: '',
+            safety: 'standard',
+            notifyDecline: true,
+            inbox: [],              // requests OTHERS sent to me
+            outbox: [],             // my queries + collected responses
+            load() {
+                try {
+                    const p = JSON.parse(localStorage.getItem('aimesh_profile') || 'null'); if (p) this.profile = { ...this.profile, ...p };
+                    const k = JSON.parse(localStorage.getItem('aimesh_knowledge') || 'null'); if (Array.isArray(k)) this.knowledge = k;
+                    const s = localStorage.getItem('aimesh_safety'); if (s) this.safety = s;
+                } catch (_) { }
+                if (!this.profile.name) this.profile.name = randomName();
+                if (this.knowledge.length === 0) this.knowledge = seedKnowledge();
+            },
+            save() {
+                localStorage.setItem('aimesh_profile', JSON.stringify(this.profile));
+                localStorage.setItem('aimesh_knowledge', JSON.stringify(this.knowledge));
+                localStorage.setItem('aimesh_safety', this.safety);
+            }
+        };
+
+        function randomName() {
+            const a = ['Ada', 'Turing', 'Lovelace', 'Hopper', 'Shannon', 'Noether', 'Curie', 'Tesla', 'Bohr', 'Fermi'];
+            const b = ['Agent', 'Node', 'Mind', 'Relay', 'Cortex'];
+            return `${a[Math.floor(Math.random() * a.length)]}'s ${b[Math.floor(Math.random() * b.length)]}`;
+        }
+        function seedKnowledge() {
+            return [
+                { id: uid(), key: 'Area of expertise', val: 'On-device machine learning and WebGPU performance tuning.', sector: 'public' },
+                { id: uid(), key: 'Favourite tools', val: 'TypeScript, Rust, and the WebRTC stack.', sector: 'public' },
+                { id: uid(), key: 'Home address', val: 'Stored locally only — never shared.', sector: 'private' }
+            ];
+        }
+
+        /* ======================================================================
+           MESH — real WebRTC data channels brokered by a tiny signalling server.
+           PeerJS gives us the broker + the RTCPeerConnection plumbing. Beacons stay
+           registered on the broker so newcomers can dial in; participants call
+           peer.disconnect() once joined, keeping their direct channels alive while
+           dropping off the signalling server entirely.
+           ====================================================================== */
+        const Mesh = {
+            peer: null,
+            myId: null,
+            conns: new Map(),       // peerId -> {conn, name, emoji, tags, relayed}
+            seen: new Set(),        // dedup of message ids (flood control)
+            seenOrder: [],
+            online: false,
+
+            async start() {
+                const shortId = 'mesh-' + Array.from({ length: 6 }, () => 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'[Math.floor(Math.random() * 32)]).join('');
+                return new Promise((resolve) => {
+                    this.peer = new Peer(shortId, { debug: 1 });
+                    this.peer.on('open', id => { this.myId = id; this.online = true; resolve(id); });
+                    this.peer.on('connection', conn => this._onIncoming(conn));
+                    this.peer.on('error', err => {
+                        console.warn('Peer error:', err.type, err);
+                        if (err.type === 'unavailable-id') { this.peer.destroy(); this.start().then(resolve); }
+                        else if (err.type === 'peer-unavailable') toast('That beacon is offline or the id is wrong.', 'bad');
+                        else if (!this.myId) { // broker failed entirely
+                            this.myId = shortId; resolve(shortId); toast('Signalling broker unreachable — running isolated.', 'bad');
+                        }
+                    });
+                    this.peer.on('disconnected', () => { if (State.role === 'beacon') { try { this.peer.reconnect(); } catch (_) { } } });
+                });
+            },
+
+            seenAdd(id) {
+                this.seen.add(id); this.seenOrder.push(id);
+                if (this.seenOrder.length > 600) this.seen.delete(this.seenOrder.shift());
+            },
+
+            // Outgoing dial to a beacon (or any peer id).
+            connectTo(peerId, relayed = false) {
+                peerId = peerId.trim();
+                if (!peerId || peerId === this.myId || this.conns.has(peerId)) return;
+                const conn = this.peer.connect(peerId, { reliable: true, metadata: { token: State.token } });
+                this._wire(conn, relayed);
+            },
+
+            _onIncoming(conn) {
+                // Auth: if a passphrase is set, the dialer must present it.
+                const offered = (conn.metadata && conn.metadata.token) || '';
+                if (State.token && offered !== State.token) {
+                    toast(`Refused ${conn.peer}: wrong passphrase.`, 'bad');
+                    try { conn.close(); } catch (_) { }
+                    return;
+                }
+                this._wire(conn, false);
+            },
+
+            _wire(conn, relayed) {
+                conn.on('open', () => {
+                    this.conns.set(conn.peer, { conn, name: conn.peer, emoji: '🤖', tags: [], relayed });
+                    // Introduce ourselves + gossip our current peer list so the mesh heals/extends.
+                    this._send(conn, this._envelope('HELLO', null, {
+                        name: State.profile.name, emoji: State.profile.emoji, tags: State.profile.tags,
+                        peers: [...this.conns.keys()].filter(p => p !== conn.peer)
+                    }));
+                    renderMesh(); updateMeshStat();
+                    // A participant only needs the broker long enough to wire up. Once we have a
+                    // live channel, drop off the signalling server — the data channel stays open.
+                    maybeLeaveBroker();
+                });
+                conn.on('data', raw => this._onMessage(conn, raw));
+                conn.on('close', () => { this.conns.delete(conn.peer); renderMesh(); updateMeshStat(); });
+                conn.on('error', e => console.warn('conn error', conn.peer, e));
+            },
+
+            _envelope(type, to, payload, ttl = 1) {
+                return { v: 1, id: uid(), type, from: this.myId, fromName: State.profile.name, fromEmoji: State.profile.emoji, to, ttl, ts: now(), payload };
+            },
+            _send(conn, env) { try { conn.send(env); } catch (e) { console.warn('send fail', e); } },
+
+            broadcast(env, exceptPeer = null) {
+                for (const [pid, info] of this.conns) {
+                    if (pid === exceptPeer) continue;
+                    this._send(info.conn, env);
+                }
+            },
+
+            // Send a query into the mesh (flooded with TTL + dedup).
+            sendQuery(text, ttl) {
+                const env = this._envelope('QUERY', null, { query: text }, ttl);
+                this.seenAdd(env.id);
+                this.broadcast(env);
+                return env.id;
+            },
+
+            sendResponse(originId, queryId, decision, answer, reason = '') {
+                const env = this._envelope('RESPONSE', originId, { queryId, decision, answer, reason }, 6);
+                this.seenAdd(env.id);
+                this.broadcast(env);
+            },
+
+            _onMessage(conn, env) {
+                if (!env || typeof env !== 'object' || !env.id) return;
+                if (this.seen.has(env.id)) return;       // already processed/forwarded
+                this.seenAdd(env.id);
+
+                if (!RateLimiter.allow(env.from)) return; // flood protection
+
+                if (env.type === 'HELLO') {
+                    const info = this.conns.get(conn.peer);
+                    if (info) { info.name = env.payload.name || conn.peer; info.emoji = env.payload.fromEmoji || env.fromEmoji || '🤖'; info.tags = env.payload.tags || []; }
+                    // Peer exchange: dial anyone we don't yet know (mesh formation/healing).
+                    (env.payload.peers || []).forEach(pid => { if (pid !== this.myId && !this.conns.has(pid)) this.connectTo(pid, true); });
+                    renderMesh();
+                    return;
+                }
+
+                if (env.type === 'QUERY') {
+                    handleIncomingQuery(env);                       // our agent decides
+                    if (env.ttl > 1) this.broadcast({ ...env, ttl: env.ttl - 1 }, conn.peer);  // keep flooding
+                    return;
+                }
+
+                if (env.type === 'RESPONSE') {
+                    if (env.to === this.myId) collectResponse(env);  // it's for me
+                    else this.broadcast(env, conn.peer);             // relay onward
+                    return;
+                }
+            }
+        };
+
+        // Participants drop the broker connection once they have at least one live channel.
+        let leftBroker = false;
+        function maybeLeaveBroker() {
+            if (State.role === 'beacon') return;
+            if (leftBroker) return;
+            if (Mesh.conns.size === 0) return;
+            leftBroker = true;
+            setTimeout(() => {
+                try { Mesh.peer.disconnect(); } catch (_) { }
+                toast('Joined the mesh — dropped off the signalling broker. Now pure P2P.', 'ok');
+                updateMeshStat();
+            }, 1200);
+        }
+
+        /* ======================================================================
+           AGENT — decides whether to answer an incoming request.
+           Private facts are withheld entirely; the model only ever sees public
+           knowledge plus the *labels* of private topics so it can decline smartly.
+           ====================================================================== */
+        async function handleIncomingQuery(env) {
+            const text = env.payload.query || '';
+            const fromLabel = `${env.fromEmoji || '🤖'} ${env.fromName || env.from}`;
+
+            // 1) Firewall ingress — always report a (generic) decline so the asker isn't left hanging,
+            //    but never leak which pattern tripped the filter.
+            const fw = Firewall.validateIngress(text);
+            if (!fw.ok) {
+                logInbox(env, 'blocked', `Firewall blocked this request: ${fw.reason}.`, '');
+                Mesh.sendResponse(env.from, env.id, 'blocked', '', 'Rejected by my security firewall.');
+                return;
+            }
+            // 2) Paranoid mode: only answer peers we are directly connected to (not relayed strangers)
+            if (State.safety === 'paranoid') {
+                const info = Mesh.conns.get(env.from);
+                if (!info || info.relayed) {
+                    const r = 'Paranoid mode: I only answer agents I am directly connected to.';
+                    logInbox(env, 'private', r, '');
+                    Mesh.sendResponse(env.from, env.id, 'private', '', State.notifyDecline ? r : '');
+                    return;
+                }
+            }
+
+            const publicFacts = State.knowledge.filter(k => k.sector === 'public');
+            const privateLabels = State.knowledge.filter(k => k.sector === 'private').map(k => k.key);
+
+            let decision = 'missing', answer = '', reason = '';
+            try {
+                const verdict = await agentDecide(text, publicFacts, privateLabels);
+                decision = verdict.decision; answer = verdict.answer; reason = verdict.reason;
+            } catch (e) {
+                console.warn('agent decide failed', e);
+                decision = 'missing'; reason = 'My agent could not process this request.';
+            }
+
+            // 3) Egress redaction (strict/paranoid auto-redact PII that slipped in)
+            if (decision === 'answered' && (State.safety === 'strict' || State.safety === 'paranoid')) {
+                answer = Firewall.redactEgress(answer);
+            }
+
+            logInbox(env, decision, reason, answer);
+
+            // Always reply so the asker sees every node's verdict. Answers carry data;
+            // declines carry only the reason (or a generic note when sharing is off).
+            if (decision === 'answered') {
+                Mesh.sendResponse(env.from, env.id, 'answered', answer, reason);
+            } else {
+                Mesh.sendResponse(env.from, env.id, decision, '', State.notifyDecline ? reason : '');
+            }
+        }
+
+        // Ask the local LLM to judge whether it can/should answer, using ONLY public facts.
+        async function agentDecide(query, publicFacts, privateLabels) {
+            const factsBlock = publicFacts.length
+                ? publicFacts.map(f => `- ${f.key}: ${f.val}`).join('\n')
+                : '(no public facts available)';
+            const privateBlock = privateLabels.length ? privateLabels.map(l => `- ${l}`).join('\n') : '(none)';
+
+            const schema = {
+                type: "object",
+                properties: {
+                    decision: { type: "string", enum: ["answered", "missing", "private"] },
+                    answer: { type: "string" },
+                    reason: { type: "string" }
+                },
+                required: ["decision", "answer", "reason"]
+            };
+            const prompt = `You are the gatekeeper for a personal AI agent on a peer-to-peer mesh. Another agent has sent a request. Decide how to respond using ONLY the knowledge below.
+
+PERSONA: ${State.profile.persona}
+
+PUBLIC KNOWLEDGE (you may share this):
+${factsBlock}
+
+PRIVATE TOPICS (you hold data on these but must NEVER reveal it):
+${privateBlock}
+
+INCOMING REQUEST: "${query}"
+
+Rules:
+- If the request can be answered from PUBLIC KNOWLEDGE, set decision="answered" and put a concise, helpful reply in "answer".
+- If the request is about a PRIVATE TOPIC, set decision="private", leave "answer" empty, and refuse.
+- If you simply do not have the information, set decision="missing" and leave "answer" empty.
+- Never invent facts that are not in PUBLIC KNOWLEDGE.
+Respond ONLY as JSON: {"decision":"answered|missing|private","answer":"...","reason":"one short sentence"}`;
+
+            const raw = await AI.run(prompt, { schema });
+            const obj = JSON.parse(extractJson(raw));
+            let decision = (obj.decision || 'missing').toLowerCase();
+            if (!['answered', 'missing', 'private'].includes(decision)) decision = 'missing';
+            return {
+                decision,
+                answer: (obj.answer || '').trim(),
+                reason: (obj.reason || '').trim() || (decision === 'answered' ? 'Answerable from public knowledge.' : decision === 'private' ? 'Touches a private topic.' : 'No matching knowledge.')
+            };
+        }
+
+        function extractJson(text) {
+            if (!text) return '{}';
+            const s = text.indexOf('{'), e = text.lastIndexOf('}');
+            return (s !== -1 && e !== -1 && e > s) ? text.slice(s, e + 1) : text;
+        }
+
+        /* ======================================================================
+           INBOX (requests others sent me)  +  OUTBOX (my queries)
+           ====================================================================== */
+        function logInbox(env, decision, reason, answer) {
+            State.inbox.unshift({
+                id: uid(), from: env.from, fromName: env.fromName, fromEmoji: env.fromEmoji,
+                query: env.payload.query || '', decision, reason, answer, ts: now(), queryId: env.id
+            });
+            if (State.inbox.length > 100) State.inbox.pop();
+            renderHistory(); bumpInboxBadge();
+            renderSecStats();
+        }
+
+        function collectResponse(env) {
+            const q = State.outbox.find(o => o.id === env.payload.queryId);
+            if (!q) return;
+            q.responses.push({
+                from: env.from, fromName: env.fromName, fromEmoji: env.fromEmoji,
+                decision: env.payload.decision, answer: env.payload.answer, reason: env.payload.reason || '', ts: now()
+            });
+            renderFeed();
+        }
+
+        /* ======================================================================
+           ASKING THE MESH (my own query, optionally answered by my own agent too)
+           ====================================================================== */
+        async function askMesh() {
+            const text = $('ask-input').value.trim();
+            if (!text) return;
+            const ttl = parseInt($('ask-ttl').value, 10);
+
+            const qid = Mesh.online ? Mesh.sendQuery(text, ttl) : uid();
+            const entry = { id: qid, query: text, ts: now(), responses: [], peerCount: Mesh.conns.size };
+            State.outbox.unshift(entry);
+            $('ask-input').value = '';
+            $('ask-input').style.height = 'auto';
+            switchTab('outbox');
+            renderFeed();
+
+            // Optionally let our own agent answer locally too.
+            if ($('ask-self').checked) {
+                try {
+                    const publicFacts = State.knowledge.filter(k => k.sector === 'public');
+                    const privateLabels = State.knowledge.filter(k => k.sector === 'private').map(k => k.key);
+                    const v = await agentDecide(text, publicFacts, privateLabels);
+                    entry.responses.push({ from: Mesh.myId, fromName: State.profile.name, fromEmoji: State.profile.emoji, decision: v.decision, answer: v.answer, reason: v.reason, self: true, ts: now() });
+                    renderFeed();
+                } catch (_) { }
+            }
+        }
+
+        /* ======================================================================
+           DOM helpers + rendering
+           ====================================================================== */
+        const $ = id => document.getElementById(id);
+        const esc = s => (s || '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+        const ago = ts => { const s = Math.floor((now() - ts) / 1000); return s < 60 ? `${s}s ago` : s < 3600 ? `${Math.floor(s / 60)}m ago` : `${Math.floor(s / 3600)}h ago`; };
+
+        function toast(msg, kind = '') {
+            const el = document.createElement('div');
+            el.className = `toast ${kind}`; el.textContent = msg;
+            $('toast-wrap').appendChild(el);
+            setTimeout(() => { el.style.opacity = '0'; el.style.transition = 'opacity .3s'; setTimeout(() => el.remove(), 300); }, 3200);
+        }
+
+        function renderProfile() {
+            $('id-name').textContent = State.profile.name;
+            $('id-ava').textContent = State.profile.emoji || '🤖';
+        }
+
+        function renderKnowledge() {
+            const list = $('kb-list');
+            list.innerHTML = '';
+            if (State.knowledge.length === 0) { list.innerHTML = `<div class="kb-empty">No facts yet. Add what your agent is allowed to share.</div>`; }
+            State.knowledge.forEach(k => {
+                const item = document.createElement('div');
+                item.className = `kb-item ${k.sector}`;
+                item.innerHTML = `
+                    <div class="kb-head">
+                        <span class="kb-key">${esc(k.key)}</span>
+                        <span class="sector-badge ${k.sector}">${k.sector === 'private' ? '🔒 private' : '🌐 public'}</span>
+                        <button class="icon-btn" data-edit-kb="${k.id}" title="Edit" style="width:24px;height:24px;font-size:.66rem"><i class="fa-solid fa-pen"></i></button>
+                        <button class="icon-btn" data-del-kb="${k.id}" title="Remove" style="width:24px;height:24px;font-size:.66rem"><i class="fa-solid fa-xmark"></i></button>
+                    </div>
+                    <div class="kb-val">${esc(k.val)}</div>`;
+                list.appendChild(item);
+            });
+            $('kb-count').textContent = `${State.knowledge.length} fact${State.knowledge.length === 1 ? '' : 's'}`;
+        }
+
+        function updateMeshStat() {
+            const stat = $('mesh-stat'), lbl = $('mesh-stat-label');
+            const n = Mesh.conns.size;
+            if (Mesh.online && n > 0) {
+                stat.className = 'mesh-stat online';
+                const brokerNote = leftBroker && State.role !== 'beacon' ? ' · off-broker' : (State.role === 'beacon' ? ' · beacon' : '');
+                lbl.textContent = `${n} peer${n === 1 ? '' : 's'}${brokerNote}`;
+            } else if (Mesh.online) {
+                stat.className = 'mesh-stat online';
+                lbl.textContent = State.role === 'beacon' ? 'Beacon — waiting' : 'Online — solo';
+            } else { stat.className = 'mesh-stat'; lbl.textContent = 'Offline'; }
+        }
+
+        function renderMesh() {
+            const list = $('peer-list');
+            const peers = [...Mesh.conns.values()];
+            if (peers.length === 0) {
+                list.innerHTML = `<div class="empty">No peers yet. Become a 📡 Beacon and share your id, or paste a beacon id above to join an existing mesh.</div>`;
+            } else {
+                list.innerHTML = '';
+                peers.forEach(p => {
+                    const card = document.createElement('div');
+                    card.className = 'peer-card';
+                    const tags = (p.tags || []).slice(0, 2).map(t => `<span class="ptag">${esc(t)}</span>`).join(' ');
+                    card.innerHTML = `
+                        <span class="pdot ${p.relayed ? 'relayed' : ''}" title="${p.relayed ? 'discovered via peer-exchange' : 'direct dial'}"></span>
+                        <span style="font-size:1.1rem">${esc(p.emoji || '🤖')}</span>
+                        <div class="pmeta"><div class="pn">${esc(p.name)}</div><div class="pi">${esc(p.conn.peer)}</div></div>
+                        ${tags}`;
+                    list.appendChild(card);
+                });
+            }
+            $('mesh-count').textContent = peers.length === 0 ? 'just you' : `${peers.length + 1} nodes`;
+            drawMeshMap();
+        }
+
+        function drawMeshMap() {
+            const map = $('mesh-map'), svg = $('mesh-svg');
+            map.querySelectorAll('.node-dot').forEach(n => n.remove());
+            svg.innerHTML = '';
+            const W = map.clientWidth || 400, H = map.clientHeight || 230;
+            const cx = W / 2, cy = H / 2;
+            const peers = [...Mesh.conns.values()];
+            const R = Math.min(W, H) / 2 - 40;
+
+            const positions = [{ x: cx, y: cy, self: true, label: State.profile.name, emoji: State.profile.emoji }];
+            peers.forEach((p, i) => {
+                const ang = (i / peers.length) * Math.PI * 2 - Math.PI / 2;
+                positions.push({ x: cx + Math.cos(ang) * R, y: cy + Math.sin(ang) * R, self: false, label: p.name, emoji: p.emoji, relayed: p.relayed });
+            });
+            // edges from self to each peer
+            positions.slice(1).forEach(p => {
+                const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+                line.setAttribute('x1', cx); line.setAttribute('y1', cy);
+                line.setAttribute('x2', p.x); line.setAttribute('y2', p.y);
+                line.setAttribute('stroke', p.relayed ? 'rgba(251,191,36,.4)' : 'rgba(56,189,248,.4)');
+                line.setAttribute('stroke-width', '1.5');
+                if (p.relayed) line.setAttribute('stroke-dasharray', '4 3');
+                svg.appendChild(line);
+            });
+            positions.forEach(p => {
+                const dot = document.createElement('div');
+                dot.className = 'node-dot' + (p.self ? ' self' : '');
+                dot.style.left = p.x + 'px'; dot.style.top = p.y + 'px';
+                dot.innerHTML = `<div class="nb">${esc(p.emoji || '🤖')}</div><div class="nl">${esc(p.self ? 'you' : p.label)}</div>`;
+                map.appendChild(dot);
+            });
+        }
+
+        /* ---- feed (outbox) ---- */
+        let activeTab = 'inbox';
+        function switchTab(t) {
+            activeTab = t;
+            document.querySelectorAll('.tab').forEach(el => el.classList.toggle('active', el.dataset.tab === t));
+            $('hist-title').textContent = t === 'inbox' ? 'Request History' : 'My Queries';
+            $('hist-sub').textContent = t === 'inbox'
+                ? 'Every request other agents sent you, the verdict, and why. Disagree? Re-answer or add a fact to tune your agent.'
+                : 'Questions you broadcast, and how the mesh replied.';
+            if (t === 'inbox') { renderHistory(); $('inbox-badge').style.display = 'none'; }
+            else renderFeedInPanel();
+        }
+
+        // The center feed always mirrors the outbox conversation.
+        function renderFeed() {
+            const feed = $('feed');
+            if (State.outbox.length === 0) { feed.innerHTML = `<div class="empty">Your conversations with the mesh appear here.</div>`; return; }
+            feed.innerHTML = '';
+            State.outbox.forEach(q => feed.appendChild(buildQBlock(q)));
+        }
+        function renderFeedInPanel() {
+            const list = $('hist-list');
+            if (State.outbox.length === 0) { list.innerHTML = `<div class="empty">You haven't asked the mesh anything yet.</div>`; return; }
+            list.innerHTML = '';
+            State.outbox.forEach(q => list.appendChild(buildQBlock(q)));
+        }
+
+        function buildQBlock(q) {
+            const block = document.createElement('div');
+            block.className = 'q-block';
+            const answered = q.responses.filter(r => r.decision === 'answered');
+            const declined = q.responses.filter(r => r.decision !== 'answered');
+            const declineWord = { private: 'withheld (private)', missing: 'no matching knowledge', blocked: 'blocked by firewall' };
+            let resps = q.responses.map(r => {
+                const cls = r.self ? 'self' : (r.decision === 'answered' ? '' : 'decline');
+                const vlabel = declineWord[r.decision] || 'declined';
+                const body = r.decision === 'answered'
+                    ? esc(r.answer || '(empty)')
+                    : `<span class="decline-tag">⊘ ${vlabel}</span>${r.reason ? `<span class="decline-reason">${esc(r.reason)}</span>` : ''}`;
+                return `<div class="resp ${cls}">
+                    <div class="ri">${esc(r.fromEmoji || '🤖')}</div>
+                    <div class="rb"><div class="rn">${esc(r.fromName || r.from)}${r.self ? ' · me' : ''}</div><div class="rt">${body}</div></div>
+                </div>`;
+            }).join('');
+            const waiting = q.peerCount > 0 && answered.length + declined.length < q.peerCount
+                ? `<div class="q-waiting"><i class="fa-solid fa-spinner fa-spin"></i> waiting on the mesh… ${q.responses.length}/${q.peerCount} replied</div>` : '';
+            block.innerHTML = `
+                <div class="q-head">
+                    <div class="qi"><i class="fa-solid fa-tower-broadcast"></i></div>
+                    <div><div class="qt">${esc(q.query)}</div><div class="qmeta">${ago(q.ts)} · broadcast to ${q.peerCount} peer${q.peerCount === 1 ? '' : 's'} · ${answered.length} answered</div></div>
+                </div>
+                <div class="q-resps">${resps || '<div class="q-waiting">no replies yet</div>'}${waiting}</div>`;
+            return block;
+        }
+
+        /* ---- history (inbox) ---- */
+        function renderHistory() {
+            if (activeTab !== 'inbox') return;
+            const list = $('hist-list');
+            if (State.inbox.length === 0) { list.innerHTML = `<div class="empty">No requests yet. When peers query the mesh, their requests to your agent land here.</div>`; return; }
+            list.innerHTML = '';
+            State.inbox.forEach(h => {
+                const card = document.createElement('div');
+                card.className = `hist-card ${h.decision}`;
+                const vmap = { answered: 'answered', missing: 'no data', private: 'withheld', blocked: 'blocked', throttled: 'throttled' };
+                card.innerHTML = `
+                    <div class="hc-top">
+                        <span style="font-size:1.05rem">${esc(h.fromEmoji || '🤖')}</span>
+                        <span class="hc-from">${esc(h.fromName || h.from)}</span>
+                        <span class="verdict ${h.decision}">${vmap[h.decision] || h.decision}</span>
+                        <span class="hc-time">${ago(h.ts)}</span>
+                    </div>
+                    <div class="hc-q">“${esc(h.query)}”</div>
+                    <div class="hc-reason">${esc(h.reason)}</div>
+                    ${h.answer ? `<div class="hc-ans">${esc(h.answer)}</div>` : ''}
+                    <div class="hc-actions">
+                        <button class="btn btn-sm btn-ghost" data-reanswer="${h.id}"><i class="fa-solid fa-reply"></i> Re-answer</button>
+                        <button class="btn btn-sm btn-ghost" data-tokb="${h.id}"><i class="fa-solid fa-plus"></i> Add as fact</button>
+                    </div>`;
+                list.appendChild(card);
+            });
+        }
+
+        function bumpInboxBadge() {
+            if (activeTab === 'inbox') return;
+            const badge = $('inbox-badge');
+            const n = (parseInt(badge.textContent, 10) || 0) + 1;
+            badge.textContent = n; badge.style.display = 'inline';
+        }
+
+        function renderSecStats() {
+            const s = Firewall.stats;
+            $('sec-stats').innerHTML = `
+                <div>🛡️ Ingress blocked: <b>${s.ingressBlocked}</b></div>
+                <div>✂️ PII redactions: <b>${s.egressRedacted}</b></div>
+                <div>🚦 Rate-limited: <b>${s.throttled}</b></div>`;
+        }
+
+        /* ======================================================================
+           UI WIRING
+           ====================================================================== */
+        function wire() {
+            // profile
+            $('edit-profile').onclick = () => {
+                $('pf-name').value = State.profile.name;
+                $('pf-emoji').value = State.profile.emoji;
+                $('pf-persona').value = State.profile.persona;
+                $('pf-tags').value = (State.profile.tags || []).join(', ');
+                openModal('profile-modal');
+            };
+            $('pf-save').onclick = () => {
+                State.profile.name = $('pf-name').value.trim() || randomName();
+                State.profile.emoji = $('pf-emoji').value.trim() || '🤖';
+                State.profile.persona = $('pf-persona').value.trim();
+                State.profile.tags = $('pf-tags').value.split(',').map(t => t.trim()).filter(Boolean);
+                State.save(); renderProfile(); closeModal('profile-modal');
+                toast('Profile saved.', 'ok');
+            };
+            $('copy-id').onclick = () => { navigator.clipboard.writeText(Mesh.myId || '').then(() => toast('Node id copied — share it to let others join.', 'ok')); };
+
+            // role
+            document.querySelectorAll('.role-opt').forEach(el => el.onclick = () => {
+                State.role = el.dataset.role;
+                document.querySelectorAll('.role-opt').forEach(o => o.classList.toggle('active', o === el));
+                if (State.role === 'beacon' && Mesh.peer && Mesh.peer.disconnected) { try { Mesh.peer.reconnect(); } catch (_) { } leftBroker = false; }
+                if (State.role === 'beacon') toast('Beacon mode — staying on the broker so newcomers can find you.', 'ok');
+                else maybeLeaveBroker();
+                updateMeshStat();
+            });
+
+            // join
+            $('join-btn').onclick = () => {
+                const id = $('join-id').value.trim();
+                if (!id) return toast('Paste a beacon node id first.', 'bad');
+                if (Mesh.peer && Mesh.peer.disconnected) { try { Mesh.peer.reconnect(); leftBroker = false; } catch (_) { } }
+                Mesh.connectTo(id);
+                toast(`Dialing ${id}…`);
+                $('join-id').value = '';
+            };
+            $('mesh-token').oninput = e => State.token = e.target.value.trim();
+
+            // knowledge
+            $('add-kb').onclick = () => { editingKb = null; $('kb-modal-title').textContent = 'Add a fact'; $('kb-key').value = ''; $('kb-val').value = ''; $('kb-sector').value = 'public'; openModal('kb-modal'); };
+            $('kb-save').onclick = () => {
+                const key = $('kb-key').value.trim(), val = $('kb-val').value.trim();
+                if (!key || !val) return toast('Both topic and value are required.', 'bad');
+                if (editingKb) { const k = State.knowledge.find(x => x.id === editingKb); Object.assign(k, { key, val, sector: $('kb-sector').value }); }
+                else State.knowledge.push({ id: uid(), key, val, sector: $('kb-sector').value });
+                State.save(); renderKnowledge(); closeModal('kb-modal');
+            };
+            $('kb-list').addEventListener('click', e => {
+                const edit = e.target.closest('[data-edit-kb]'), del = e.target.closest('[data-del-kb]');
+                if (edit) {
+                    editingKb = edit.dataset.editKb;
+                    const k = State.knowledge.find(x => x.id === editingKb);
+                    $('kb-modal-title').textContent = 'Edit fact'; $('kb-key').value = k.key; $('kb-val').value = k.val; $('kb-sector').value = k.sector;
+                    openModal('kb-modal');
+                }
+                if (del) { State.knowledge = State.knowledge.filter(x => x.id !== del.dataset.delKb); State.save(); renderKnowledge(); }
+            });
+
+            // safety
+            $('safety-level').onchange = e => { State.safety = e.target.value; State.save(); toast(`Safety level: ${e.target.value}.`, 'ok'); };
+            $('notify-decline').onchange = e => State.notifyDecline = e.target.checked;
+
+            // ask — Enter sends, Shift+Enter makes a newline; textarea auto-grows
+            $('ask-btn').onclick = askMesh;
+            const askInput = $('ask-input');
+            const autoGrow = () => { askInput.style.height = 'auto'; askInput.style.height = Math.min(askInput.scrollHeight, 160) + 'px'; };
+            askInput.addEventListener('input', autoGrow);
+            askInput.addEventListener('keydown', e => {
+                if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); askMesh(); }
+            });
+
+            // tabs
+            document.querySelectorAll('.tab').forEach(t => t.onclick = () => switchTab(t.dataset.tab));
+            $('clear-hist').onclick = () => {
+                if (activeTab === 'inbox') { State.inbox = []; renderHistory(); } else { State.outbox = []; renderFeed(); renderFeedInPanel(); }
+            };
+
+            // history actions
+            $('hist-list').addEventListener('click', e => {
+                const ra = e.target.closest('[data-reanswer]'), tk = e.target.closest('[data-tokb]');
+                if (ra) openReanswer(ra.dataset.reanswer);
+                if (tk) {
+                    const h = State.inbox.find(x => x.id === tk.dataset.tokb);
+                    editingKb = null; $('kb-modal-title').textContent = 'Add a fact';
+                    $('kb-key').value = h.query.slice(0, 60); $('kb-val').value = h.answer || ''; $('kb-sector').value = 'public';
+                    openModal('kb-modal');
+                }
+            });
+            $('ra-send').onclick = () => {
+                const h = State.inbox.find(x => x.id === reanswerId); if (!h) return;
+                const text = $('ra-text').value.trim(); if (!text) return;
+                Mesh.sendResponse(h.from, h.queryId, 'answered', text);
+                h.decision = 'answered'; h.answer = text; h.reason = 'Manually answered by the operator.';
+                renderHistory(); closeModal('reanswer-modal'); toast('Reply sent to ' + (h.fromName || h.from), 'ok');
+            };
+
+            // modal close
+            document.querySelectorAll('[data-close]').forEach(b => b.onclick = () => closeModal(b.dataset.close));
+            document.querySelectorAll('.modal-overlay').forEach(o => o.addEventListener('click', e => { if (e.target === o) closeModal(o.id); }));
+
+            window.addEventListener('resize', () => drawMeshMap());
+        }
+
+        let editingKb = null, reanswerId = null;
+        function openReanswer(id) {
+            const h = State.inbox.find(x => x.id === id); if (!h) return;
+            reanswerId = id;
+            $('ra-context').textContent = `${h.fromName || h.from} asked: “${h.query}”`;
+            $('ra-text').value = h.answer || '';
+            openModal('reanswer-modal');
+        }
+        function openModal(id) { $(id).classList.add('show'); }
+        function closeModal(id) { $(id).classList.remove('show'); }
+
+        /* ======================================================================
+           BOOTSTRAP
+           ====================================================================== */
+        async function bootApp() {
+            State.load();
+            renderProfile(); renderKnowledge(); renderSecStats();
+            $('safety-level').value = State.safety;
+            wire();
+
+            const chip = $('top-backend'), lbl = $('top-backend-label');
+            if (AI.backend === 'chrome') { chip.className = 'backend-chip ok'; lbl.textContent = 'Chrome built-in AI'; }
+            else { chip.className = 'backend-chip gemma'; lbl.textContent = 'On-device Gemma'; }
+
+            $('loader').style.display = 'none';
+            $('app').style.display = 'block';
+
+            // bring the node online
+            try {
+                const id = await Mesh.start();
+                $('id-pid').textContent = id;
+                updateMeshStat();
+                drawMeshMap();
+                toast('Node online. Share your id to let agents join, or paste a beacon id to dial in.', 'ok');
+            } catch (e) {
+                console.error(e); $('id-pid').textContent = 'offline';
+                toast('Could not reach the signalling broker.', 'bad');
+            }
+
+            // auto-join via ?join=<id> in the URL (handy for spinning up a mesh fast)
+            const params = new URLSearchParams(location.search);
+            if (params.get('join')) { $('join-id').value = params.get('join'); setTimeout(() => $('join-btn').click(), 800); }
+            if (params.get('role') === 'beacon') $('role-beacon').click();
+        }
+
+        async function init() {
+            const backend = await AI.detect();
+            const chip = $('backend-chip'), label = $('backend-label');
+            const action = $('gate-action'), note = $('gate-note'), sub = $('gate-sub');
+            if (backend === 'chrome') {
+                chip.className = 'backend-chip ok';
+                label.textContent = 'Chrome built-in AI detected';
+                note.innerHTML = 'Your browser has the built-in <b>Prompt API</b>. Your agent reasons entirely on-device — nothing leaves your machine except the answers you choose to share.';
+                sub.textContent = "Powered by Chrome's built-in language model.";
+                AI.ready = true;
+            } else {
+                chip.className = 'backend-chip gemma';
+                label.textContent = 'No built-in AI — using Gemma';
+                note.innerHTML = 'No built-in AI found, so your node runs Google <b>Gemma</b> locally via WebGPU. First run is a one-time <b>≈ 2 GB</b> download, cached for next time.';
+                sub.textContent = 'Needs Chrome or Edge with WebGPU. Downloads only when you continue.';
+            }
+            action.style.display = 'block';
+
+            $('enter-btn').onclick = async () => {
+                if (backend === 'gemma') {
+                    action.style.display = 'none';
+                    $('gate-loading').style.display = 'block';
+                    try { await loadGemma(); AI.ready = true; }
+                    catch (e) { console.error(e); $('loader-message').textContent = 'Could not load Gemma: ' + e.message; return; }
+                }
+                bootApp();
+            };
+        }
+
+        document.addEventListener('DOMContentLoaded', init);
+        if (document.readyState !== 'loading') init();
+    </script>
+</body>
+
+</html>

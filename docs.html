@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI Mesh — Documentation</title>
+<meta name="description" content="Documentation for AI Mesh: a peer-to-peer fabric of on-device AI agents.">
+<meta property="og:type" content="article">
+<meta property="og:title" content="AI Mesh — Documentation">
+<meta property="og:description" content="A peer-to-peer mesh of on-device AI agents, each running a local LLM and a personal MCP.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=Space+Grotesk:wght@400;500;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github-dark.min.css">
+<style>
+  :root{
+    --bg:#070b16;--panel:#111a2e;--panel-2:#18233d;--ink:#eef3ff;--muted:#93a3c6;
+    --node:#38bdf8;--mesh:#a78bfa;--accent:#22d3ee;--line:rgba(255,255,255,.1);
+    --font:'Outfit',system-ui,sans-serif;--head:'Space Grotesk',system-ui,sans-serif;--mono:'JetBrains Mono',ui-monospace,monospace;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--font);line-height:1.7;-webkit-font-smoothing:antialiased;
+    background-image:radial-gradient(circle at 12% 0%,rgba(56,189,248,.1) 0,transparent 40%),radial-gradient(circle at 90% 8%,rgba(167,139,250,.1) 0,transparent 42%);}
+  a{color:var(--accent);text-decoration:none}
+  a:hover{text-decoration:underline}
+  .bar{position:sticky;top:0;z-index:10;display:flex;flex-wrap:wrap;align-items:center;gap:8px 18px;
+    padding:13px clamp(16px,4vw,40px);background:rgba(7,11,22,.6);backdrop-filter:blur(12px);border-bottom:1px solid var(--line)}
+  .bar .brand{font-family:var(--head);font-weight:700;font-size:1.05rem;letter-spacing:.2px;color:var(--ink);margin-right:auto;display:inline-flex;align-items:center;gap:10px}
+  .bar .brand .mark{width:30px;height:30px;border-radius:9px;display:grid;place-items:center;background:linear-gradient(135deg,var(--node),var(--mesh));font-size:.95rem}
+  .nv{font-size:.9rem;color:var(--muted);white-space:nowrap;transition:.15s;padding:6px 11px;border-radius:9px;border:1px solid transparent}
+  .nv:hover{color:var(--accent);text-decoration:none;border-color:var(--line);background:var(--panel)}
+  .nv.primary{color:#04121f;background:linear-gradient(120deg,var(--node),var(--accent));font-weight:600;border:none}
+  .nv.primary:hover{color:#04121f;filter:brightness(1.05)}
+  .doc{max-width:880px;margin:0 auto;padding:46px clamp(18px,5vw,28px) 120px}
+  .md{font-size:1rem}
+  .md h1,.md h2,.md h3,.md h4{font-family:var(--head);line-height:1.25;margin:1.9em 0 .6em;font-weight:700;letter-spacing:-.01em}
+  .md h1{font-size:2.2em;margin-top:.1em;padding-bottom:.3em;border-bottom:1px solid var(--line);
+    background:linear-gradient(110deg,var(--node),var(--mesh) 60%,var(--accent));-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
+  .md h2{font-size:1.55em;padding-bottom:.28em;border-bottom:1px solid var(--line)}
+  .md h3{font-size:1.24em;color:var(--node)} .md h4{font-size:1.06em}
+  .md p,.md li{color:var(--ink)}
+  .md strong{color:#fff}
+  .md code{font-family:var(--mono);font-size:.86em;background:rgba(56,189,248,.12);color:#bfe9ff;padding:.16em .42em;border-radius:6px}
+  .md pre{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--node);border-radius:12px;padding:16px 18px;overflow:auto;margin:1.1em 0}
+  .md pre code{background:none;padding:0;color:#cfe8ff;font-size:.86em;line-height:1.6}
+  .md blockquote{margin:1.1em 0;padding:.4em 1.1em;border-left:3px solid var(--mesh);background:rgba(167,139,250,.07);color:var(--muted);border-radius:0 8px 8px 0}
+  .md ul,.md ol{padding-left:1.5em} .md li{margin:.3em 0}
+  .md img{max-width:100%;height:auto;border-radius:10px}
+  .md hr{border:none;border-top:1px solid var(--line);margin:2em 0}
+  .md table{border-collapse:collapse;width:100%;margin:1.2em 0;font-size:.94em;display:block;overflow:auto}
+  .md th,.md td{border:1px solid var(--line);padding:8px 13px;text-align:left}
+  .md th{background:var(--panel)}
+  .md tr:nth-child(2n) td{background:rgba(127,127,127,.05)}
+  .loading{color:var(--muted);font-size:.9rem}
+  footer{max-width:880px;margin:0 auto;padding:30px clamp(18px,5vw,28px) 60px;border-top:1px solid var(--line);
+    color:var(--muted);font-size:.85rem;display:flex;flex-wrap:wrap;gap:8px 20px;align-items:center}
+  footer a{color:var(--accent)}
+  footer .sp{margin-left:auto}
+  ::-webkit-scrollbar{width:9px;height:9px}::-webkit-scrollbar-track{background:transparent}
+  ::-webkit-scrollbar-thumb{background:var(--panel-2);border-radius:5px}
+</style>
+</head>
+<body>
+  <nav class="bar">
+    <span class="brand"><span class="mark">🕸️</span>AI Mesh</span>
+    <a class="nv" href="index.html">⌂ Home</a>
+    <a class="nv primary" href="app.html">▶ Launch app</a>
+    <a class="nv" href="https://github.com/woodyhoko/ai-mesh" target="_blank" rel="noopener">➤ Source</a>
+  </nav>
+  <main class="doc">
+    <article id="md" class="md"><p class="loading">Loading documentation…</p></article>
+  </main>
+  <footer>
+    <span>Documentation for <b>AI Mesh</b> — connected on-device intelligence</span>
+    <span class="sp">Source: <a href="https://github.com/woodyhoko/ai-mesh" target="_blank" rel="noopener">github.com/woodyhoko/ai-mesh</a></span>
+  </footer>
+
+<script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/highlight.min.js"></script>
+<script>
+  var GH = "https://github.com/woodyhoko/ai-mesh";
+  marked.setOptions({ gfm:true, breaks:false });
+  fetch("README.md", {cache:"no-cache"})
+    .then(function(r){ if(!r.ok) throw new Error("HTTP "+r.status); return r.text(); })
+    .then(function(md){
+      var el = document.getElementById("md");
+      el.innerHTML = marked.parse(md);
+      el.querySelectorAll('a[href^="http"]').forEach(function(a){ a.target="_blank"; a.rel="noopener"; });
+      if (window.hljs) el.querySelectorAll('pre code').forEach(function(b){ try{ hljs.highlightElement(b); }catch(e){} });
+      document.title = (el.querySelector('h1') ? el.querySelector('h1').textContent + " — Docs" : document.title);
+    })
+    .catch(function(){
+      document.getElementById("md").innerHTML =
+        "<p>Couldn't load the README here. View it on <a href='" + GH + "#readme'>GitHub</a> instead.</p>";
+    });
+</script>
+</body>
+</html>
