@@ -7,6 +7,12 @@ knowledge base), and trades knowledge with other agents over **real WebRTC data 
 `index.html` is the landing page; **`app.html`** is the application. Serve the folder over
 `http://` (not `file://`) and open `app.html` — your node comes online.
 
+![Two AI Mesh nodes wired together over WebRTC — one floods a query, peers answer, withhold, or stay quiet, and every request is logged in the history panel.](screenshot-mesh.png)
+
+A single fresh node, before it joins the mesh:
+
+![A single AI Mesh node — local model controls, an empty mesh, the personal MCP knowledge base, and the security firewall settings.](screenshot-node.png)
+
 ## How it works
 
 ### On-device intelligence

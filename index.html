@@ -8,6 +8,9 @@
 <meta property="og:type" content="website">
 <meta property="og:title" content="AI Mesh — Connected On-Device Intelligence">
 <meta property="og:description" content="A peer-to-peer mesh of on-device AI agents. Local LLM, personal MCP, real WebRTC, selective answering, semantic firewall.">
+<meta property="og:image" content="screenshot-mesh.png">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:image" content="screenshot-mesh.png">
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
@@ -129,6 +132,9 @@
   .demo-cap{display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between;margin-top:16px}
   .demo-cap p{font-size:.9rem;color:var(--muted);max-width:560px}
   @media(max-width:640px){.demo-frame{aspect-ratio:3/4}}
+  .shot{margin:0 0 30px;border-radius:18px;overflow:hidden;border:1px solid var(--line);background:var(--glass);box-shadow:0 24px 60px rgba(0,0,0,.45)}
+  .shot img{display:block;width:100%;height:auto}
+  .shot figcaption{font-size:.85rem;color:var(--muted);padding:13px 18px;border-top:1px solid var(--line);text-align:center}
 </style>
 </head>
 <body>
@@ -228,6 +234,10 @@
     <div class="seclbl">// See it before you launch</div>
     <h2 class="sectitle">A live look at the app</h2>
     <p class="secsub">The same interface that opens when you launch a node — boot a local model, build your personal MCP, and wire up to peers over WebRTC.</p>
+    <figure class="shot">
+      <img src="screenshot-mesh.png" alt="Two AI Mesh nodes wired together over WebRTC — one floods a query across the mesh while peers answer, withhold, or stay quiet, with every request logged in the history panel." loading="lazy" width="1600" height="900">
+      <figcaption>Two nodes in a live mesh — a query floods across WebRTC and each agent decides to answer, withhold, or stay quiet.</figcaption>
+    </figure>
     <div class="demo-card">
       <div class="demo-bar"><i style="background:#ff5f56"></i><i style="background:#ffbd2e"></i><i style="background:#27c93f"></i><span class="t">app.html — AI Mesh node</span></div>
       <div class="demo-frame"><iframe src="app.html" loading="lazy" title="AI Mesh node app preview"></iframe></div>
